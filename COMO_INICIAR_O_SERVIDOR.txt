@@ -1,0 +1,43 @@
+============================================================
+    GUIA RAPIDO PARA INICIAR O SERVIDOR DO JOGO WIZZ
+============================================================
+
+Para iniciar o servidor, siga os passos abaixo. Voce so precisa
+fazer o PASSO 2 (npm install) uma unica vez.
+
+------------------------------------------------------------
+PASSO 1: ABRA O TERMINAL NA PASTA DO PROJETO
+------------------------------------------------------------
+Clique com o botao direito do mouse em um espaco vazio
+desta pasta e selecione "Abrir no Terminal" ou "Abrir
+janela do PowerShell aqui".
+
+Se essa opcao nao aparecer, abra o menu Iniciar, digite "cmd",
+abra o "Prompt de Comando" e use o comando 'cd' para navegar
+ate a pasta do projeto. Exemplo:
+cd C:\Caminho\Para\O\Seu\Jogo
+
+------------------------------------------------------------
+PASSO 2: INSTALAR AS DEPENDENCIAS (SO NA PRIMEIRA VEZ)
+------------------------------------------------------------
+No terminal que voce abriu, digite o seguinte comando e
+pressione Enter. Espere ele terminar de instalar.
+
+npm install
+
+------------------------------------------------------------
+PASSO 3: INICIAR O SERVIDOR (FAZER ISSO SEMPRE)
+------------------------------------------------------------
+Apos instalar as dependencias, sempre que quiser ligar o
+servidor, digite o seguinte comando no terminal e pressione
+Enter:
+
+npm start
+
+------------------------------------------------------------
+
+O servidor estara rodando. Deixe esta janela do terminal
+aberta enquanto estiver jogando. Para desligar o servidor,
+volte para esta janela e pressione as teclas CTRL + C.
+
+============================================================
