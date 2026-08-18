@@ -179,20 +179,35 @@ function updateServerMonsters(deltaTime, players) {
             }
         }
 
-        // Limites verticais de segurança do teto e chão
-        const limitLeft = 100;
-        const limitRight = SCENARIO_WIDTH - 100;
-        const limitBottom = SCENARIO_HEIGHT - 100;
+        // =================================================================
+        // ZONA DE EXCLUSÃO RIGIDA E RESET DE NASCIMENTO NO CÉU
+        // =================================================================
+        // Barreiras físicas das torres de pedra: esquerda em 120, direita em 2056.
+        // Limite inferior do chão: 980. Limite superior ativo do céu: 100.
+        const outOfBoundsLeft = m.x < 120;
+        const outOfBoundsRight = m.x > 2056;
+        const outOfBoundsBottom = m.y > 980;
+        const outOfBoundsCeiling = m.hasLanded && m.y < 100;
 
-        const isOutOfBounds = m.x < -100 || m.x > SCENARIO_WIDTH + 100 || m.y > limitBottom || m.y < -300;
+        const isOutOfBounds = outOfBoundsLeft || outOfBoundsRight || outOfBoundsBottom || outOfBoundsCeiling;
         
         if (isOutOfBounds) {
-            m.x = Math.random() * (limitRight - limitLeft) + limitLeft;
-            m.y = Math.random() * (limitBottom - 300) + 150;
-            m.targetY = m.y;
-            m.hasLanded = true;
+            // Se bugar fora dos limites das torres, reseta ele para o céu para descer como monstro novo
+            m.x = Math.random() * (1900 - 200) + 200; // Ponto X seguro
+            m.y = -64; // Seta no topo do céu
+            m.targetY = Math.random() * (750 - 250) + 250; // Novo Y de aterrissagem seguro
+            m.hasLanded = false; // Força nova queda
             m.velX = 0;
-            m.velY = 0;
+            m.velY = 2; // Força velocidade de queda base
+            continue;
+        }
+
+        // =================================================================
+        // EVITAÇÃO DE TETO (GRAVIDADE ARTIFICIAL)
+        // =================================================================
+        // Se o monstro estiver na metade de cima da tela (Y < 350), aplica uma força constante de descida
+        if (m.hasLanded && m.y < 350) {
+            m.y += 1.5; 
         }
 
         let targetPlayer = null;
@@ -223,7 +238,8 @@ function updateServerMonsters(deltaTime, players) {
         }
 
         if (!m.hasLanded) {
-            m.y += m.velY * 4 * (deltaTime / 16.67); // 4 é a velocidade de descida inicial
+            // Aumentado multiplicador de queda para fazê-los despencar do céu mais rapidamente
+            m.y += (m.velY * 3) * (deltaTime / 16.67);
             if (m.y >= m.targetY) {
                 m.y = m.targetY;
                 m.hasLanded = true;
@@ -279,10 +295,8 @@ function updateServerMonsters(deltaTime, players) {
                 if (!m.lastTouchDamageTime || now - m.lastTouchDamageTime > 1000) {
                     m.lastTouchDamageTime = now;
                     
-                    // Causa dano de toque compartilhado
                     GameManager.takeDamage(m.damage || 20, GameManager.broadcastCallback);
                     
-                    // Lógica de Reflexão de Dano de Toque
                     const reflectTouchMult = p.stats ? p.stats.reflectTouchDamageMultiplier : 0;
                     if (reflectTouchMult > 0) {
                         const reflectDamage = (p.stats.attack || 20) * reflectTouchMult;
@@ -307,8 +321,10 @@ function updateServerMonsters(deltaTime, players) {
             }
         }
         
-        m.x = Math.max(100, Math.min(SCENARIO_WIDTH - m.width, m.x));
-        m.y = Math.max(-200, Math.min(SCENARIO_HEIGHT - 100, m.y));
+        // BARREIRAS FÍSICAS RÍGIDAS (Clamping)
+        // Limita de forma estrita a movimentação dos monstros para que fiquem sempre na área visível
+        m.x = Math.max(120, Math.min(2056 - m.width, m.x));
+        m.y = Math.max(100, Math.min(950, m.y));
     }
 }
 
