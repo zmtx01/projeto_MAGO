@@ -413,8 +413,13 @@ function gameLoop(time = 0) {
     if (typeof drawMonstros === 'function') drawMonstros(); 
     if (typeof drawImpactos === 'function') drawImpactos(deltaTime);
     if (typeof drawParticles === 'function') drawParticles();
-    //if (typeof drawMonstroCounter === 'function') drawMonstroCounter();
-    // exibição do contador de monstros restantes na tela
+    
+    // Mantém o antigo comentado como backup
+    // if (typeof drawMonstroCounter === 'function') drawMonstroCounter();
+    
+    // Ativa o novo contador simplificado
+    if (typeof drawWaveCounter === 'function') drawWaveCounter();
+    
     drawHUD();
     drawRaios();
 

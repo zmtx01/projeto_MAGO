@@ -2,7 +2,7 @@
 // GAME_MANAGER.JS (Cérebro do Jogo Multiplayer - Sincronizado, Compactado e Sessões)
 // =================================================================
 
-const { Monstro, configPadrao, getHordeConfig } = require('./monstro.js');
+const { Monstro, configPadrao, getHordeConfig, MONSTER_FALL_MULTIPLIER } = require('./monstro.js');
 
 const gameState = {
     isGameRunning: false,
@@ -239,7 +239,7 @@ function updateServerMonsters(deltaTime, players) {
 
         if (!m.hasLanded) {
             // Aumentado multiplicador de queda para fazê-los despencar do céu mais rapidamente
-            m.y += (m.velY * 3) * (deltaTime / 16.67);
+            m.y += (m.velY * MONSTER_FALL_MULTIPLIER) * (deltaTime / 16.67);
             if (m.y >= m.targetY) {
                 m.y = m.targetY;
                 m.hasLanded = true;
