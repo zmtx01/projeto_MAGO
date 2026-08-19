@@ -445,6 +445,12 @@ window.resetPlayerStats = function() {
     if (!window.player) return;
     const player = window.player;
     
+    // --- NOVO: Cancela qualquer temporizador ativo de ondas offline ---
+    if (window.hordeTimeoutId) {
+        clearTimeout(window.hordeTimeoutId);
+        window.hordeTimeoutId = null;
+    }
+    
     player.level = 1;
     player.xp = 0;
     player.xpMax = 100;
@@ -474,8 +480,17 @@ window.resetPlayerStats = function() {
     if (window.particles) window.particles.length = 0;
     
     // Limpa em definitivo os projéteis locais dos monstros de ambas as telas (offline e online)
-    if (window.monstroProjectiles) window.monstroProjectiles.length = 0;
-    if (window.mpMonstroProjectiles) window.mpMonstroProjectiles.length = 0;
+    if (typeof window.clearMonstroProjectiles === 'function') {
+        window.clearMonstroProjectiles();
+    } else if (window.monstroProjectiles) {
+        window.monstroProjectiles.length = 0;
+    }
+
+    if (typeof window.clearMpMonstroProjectiles === 'function') {
+        window.clearMpMonstroProjectiles();
+    } else if (window.mpMonstroProjectiles) {
+        window.mpMonstroProjectiles.length = 0;
+    }
     
     // Reseta variáveis globais de controle de interface e hordas
     window.ordaAtual = 1;

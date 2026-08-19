@@ -1,5 +1,5 @@
 // =================================================================
-// SERVER.JS (Gerenciador de Protocolos e Comunicação - Sincronizado)
+// SERVER.JS (Gerenciador de Protocolos e Comunicação - Sincronizado para 4 Players)
 // =================================================================
 
 const http = require('http');
@@ -44,12 +44,17 @@ const wss = new WebSocket.Server({ server });
 let playerConnections = {};
 GameManager.setServerConnections(playerConnections); // Vincula os sockets ao GameManager para monitoramento de inatividade
 
+// Função atualizada para retornar o estado de conexão e de "takeover" para os 4 slots
 function getPlayerStates() {
     return {
         p1Connected: !!playerConnections[1],
         p2Connected: !!playerConnections[2],
+        p3Connected: !!playerConnections[3],
+        p4Connected: !!playerConnections[4],
         p1TakeoverReady: GameManager.isSlotTakeoverReady(1),
-        p2TakeoverReady: GameManager.isSlotTakeoverReady(2)
+        p2TakeoverReady: GameManager.isSlotTakeoverReady(2),
+        p3TakeoverReady: GameManager.isSlotTakeoverReady(3),
+        p4TakeoverReady: GameManager.isSlotTakeoverReady(4)
     };
 }
 
@@ -76,16 +81,24 @@ wss.on('connection', ws => {
                     let assignedSlot = null;
                     const activeTokens = GameManager.getTokens();
 
-                    // 1. Tenta reconectar pelo Token da mesma máquina
+                    // 1. Tenta reconectar pelo Token da mesma máquina (Busca nos 4 slots)
                     if (clientToken) {
-                        if (activeTokens[1] === clientToken) assignedSlot = 1;
-                        else if (activeTokens[2] === clientToken) assignedSlot = 2;
+                        for (let s = 1; s <= 4; s++) {
+                            if (activeTokens[s] === clientToken) {
+                                assignedSlot = s;
+                                break;
+                            }
+                        }
                     }
 
-                    // 2. Se não tem token, busca uma vaga vazia física
+                    // 2. Se não tem token, busca uma vaga vazia física livre (slots de 1 a 4)
                     if (!assignedSlot) {
-                        if (!playerConnections[1] && !GameManager.getGameState().isGameRunning) assignedSlot = 1;
-                        else if (!playerConnections[2] && !GameManager.getGameState().isGameRunning) assignedSlot = 2;
+                        for (let s = 1; s <= 4; s++) {
+                            if (!playerConnections[s] && !GameManager.getGameState().isGameRunning) {
+                                assignedSlot = s;
+                                break;
+                            }
+                        }
                     }
 
                     // 3. Resposta de conexão bem-sucedida
@@ -101,7 +114,7 @@ wss.on('connection', ws => {
                         const finalToken = clientToken || crypto.randomBytes(16).toString('hex');
                         GameManager.registerToken(assignedSlot, finalToken);
 
-                        console.log(`P${assignedSlot} conectado (Token verificado).`);
+                        console.log(`P${assignedSlot} conectado (Token verificado com sucesso).`);
                         ws.send(JSON.stringify({ 
                             type: 'player-assigned', 
                             payload: { playerNumber: assignedSlot, token: finalToken } 
@@ -117,7 +130,7 @@ wss.on('connection', ws => {
                             GameManager.syncReconnectedPlayer(assignedSlot, ws);
                         }
                     } else {
-                        // 4. CORREÇÃO: Mantém o socket do visitante aberto para permitir cliques em "Assumir Mago"
+                        // 4. Se não há slots livres, mantém conexão aberta como visitante e envia estados de takeover de todos
                         ws.send(JSON.stringify({ 
                             type: 'server-full', 
                             payload: getPlayerStates() 
@@ -125,11 +138,11 @@ wss.on('connection', ws => {
                     }
                     break;
 
-                // Troca de máquina / Substituição por inatividade
+                // Troca de máquina / Substituição por inatividade (Suporta de 1 a 4 slots)
                 case 'request-takeover':
                     const requestedSlot = message.payload.slot;
                     if (GameManager.isSlotTakeoverReady(requestedSlot)) {
-                        console.log(`Substituição aceita! Novo computador assumiu a vaga de P${requestedSlot}.`);
+                        console.log(`Substituição aceita! Novo computador assumiu a vaga do mago P${requestedSlot}.`);
                         
                         ws.playerNumber = requestedSlot;
                         playerConnections[requestedSlot] = ws;
@@ -152,13 +165,15 @@ wss.on('connection', ws => {
                     break;
 
                 case 'request-start-game':
-                    if (playerConnections[1] && playerConnections[2]) {
+                    // Permite iniciar a partida se ao menos o Host (Player 1) estiver conectado
+                    if (playerConnections[1]) {
                         broadcast({ type: 'prepare-to-start' });
                     }
                     break;
 
                 case 'final-click':
-                    if (playerConnections[1] && playerConnections[2] && !GameManager.getGameState().isGameRunning) {
+                    // Inicia o jogo se o Host (Player 1) validar o clique
+                    if (playerConnections[1] && !GameManager.getGameState().isGameRunning) {
                         const grassSeed = Math.random(); 
                         GameManager.startGame(broadcast, grassSeed);
                     }
@@ -225,7 +240,7 @@ wss.on('connection', ws => {
                     break;
             }
             
-        } catch (error) { console.error("Erro ao processar mensagem:", error); }
+        } catch (error) { console.error("Erro ao processar mensagem do cliente:", error); }
     });
 
     ws.on('close', () => {

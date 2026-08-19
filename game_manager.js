@@ -1,8 +1,8 @@
 // =================================================================
-// GAME_MANAGER.JS (Cérebro do Jogo Multiplayer - Sincronizado, Compactado e Sessões)
+// GAME_MANAGER.JS (Cérebro do Jogo Multiplayer - Sincronizado para 4 Players)
 // =================================================================
 
-const { Monstro, configPadrao, getHordeConfig, MONSTER_FALL_MULTIPLIER } = require('./monstro.js');
+const { Monstro, configPadrao, getHordeConfig } = require('./monstro.js');
 
 const gameState = {
     isGameRunning: false,
@@ -22,10 +22,10 @@ let monsterStock = [];
 let pendingRuneChoicesCount = {}; // Memória contadora de escolhas por jogador
 let isLevelUpLock = false; 
 
-let playerTokens = {}; // Guarda o token de reconexão de cada slot (1 ou 2)
-let playerDisconnectTime = {}; // Guarda o timestamp da desconexão
+let playerTokens = {}; // Guarda o token de reconexão de cada slot (suporta de 1 a 4)
+let playerDisconnectTime = {}; // Guarda o timestamp da desconexão (suporta de 1 a 4)
 let serverConnections = {}; // Referência para os sockets ativos de server.js
-let playerLevel = {}; // Guarda o nível em que cada jogador desconectou
+let playerLevel = {}; // Guarda o nível em que cada jogador desconectou (suporta de 1 a 4)
 
 // Sistema de Reciclagem de IDs (IDs de m1 a m30)
 let availableMonsterIds = [];
@@ -88,55 +88,68 @@ function spawnServerMonster(tipo, config) {
     return newMonster;
 }
 
+// Algoritmo dinâmico de balanceamento de foco dos monstros compatível com até 4 jogadores
 function balanceMonsterTargets(players) {
     if (players.length < 2) return;
 
-    const player1 = players.find(p => p.id === 1);
-    const player2 = players.find(p => p.id === 2);
-
-    if (!player1 || !player2) return;
-
-    let p1Targets = [];
-    let p2Targets = [];
+    // Contabiliza quantos monstros estão focando cada jogador ativo atualmente
+    const targetCounts = {};
+    players.forEach(p => { targetCounts[p.id] = 0; });
 
     serverMonsters.forEach(m => {
-        if (m.currentTarget === player1) p1Targets.push(m);
-        else if (m.currentTarget === player2) p2Targets.push(m);
+        if (m.currentTarget && targetCounts[m.currentTarget.id] !== undefined) {
+            targetCounts[m.currentTarget.id]++;
+        }
     });
 
     const totalMonsters = serverMonsters.length;
     if (totalMonsters < 4) return;
 
-    const imbalanceThreshold = 0.70;
-    const rebalancePercentage = 0.25;
+    // Encontra o jogador com mais monstros (overloaded) e o mais livre (free)
+    let overloadedPlayerId = null;
+    let freePlayerId = null;
+    let maxTargets = -1;
+    let minTargets = Infinity;
 
-    let overloadedPlayer, freePlayer, overloadedMonsters;
-
-    if (p1Targets.length / totalMonsters > imbalanceThreshold) {
-        overloadedPlayer = player1;
-        freePlayer = player2;
-        overloadedMonsters = p1Targets;
-    } else if (p2Targets.length / totalMonsters > imbalanceThreshold) {
-        overloadedPlayer = player2;
-        freePlayer = player1;
-        overloadedMonsters = p2Targets;
-    } else {
-        return;
-    }
-
-    const monstersToReassignCount = Math.ceil(overloadedMonsters.length * rebalancePercentage);
-
-    overloadedMonsters.sort((a, b) => {
-        const distA = Math.hypot(a.x - freePlayer.x, a.y - freePlayer.y);
-        const distB = Math.hypot(b.x - freePlayer.x, b.y - freePlayer.y);
-        return distA - distB;
+    players.forEach(p => {
+        const count = targetCounts[p.id];
+        if (count > maxTargets) {
+            maxTargets = count;
+            overloadedPlayerId = p.id;
+        }
+        if (count < minTargets) {
+            minTargets = count;
+            freePlayerId = p.id;
+        }
     });
 
-    for (let i = 0; i < monstersToReassignCount; i++) {
-        if (overloadedMonsters[i]) {
-            const monster = overloadedMonsters[i];
-            monster.currentTarget = freePlayer;
-            monster.targetLockTime = Date.now() + 5000;
+    if (!overloadedPlayerId || !freePlayerId || overloadedPlayerId === freePlayerId) return;
+
+    const overloadedPlayer = players.find(p => p.id === overloadedPlayerId);
+    const freePlayer = players.find(p => p.id === freePlayerId);
+
+    // Se um jogador sozinho acumular mais de 60% do total de monstros ativos na tela
+    const imbalanceThreshold = 0.60;
+    if (maxTargets / totalMonsters > imbalanceThreshold) {
+        const overloadedMonsters = serverMonsters.filter(m => m.currentTarget && m.currentTarget.id === overloadedPlayerId);
+        
+        // Reequilibra 25% dos monstros dele para o jogador que está mais livre no momento
+        const rebalancePercentage = 0.25;
+        const monstersToReassignCount = Math.ceil(overloadedMonsters.length * rebalancePercentage);
+
+        // Ordena pela distância física ao jogador mais livre (prioriza reatribuir quem está mais perto dele)
+        overloadedMonsters.sort((a, b) => {
+            const distA = Math.hypot(a.x - freePlayer.x, a.y - freePlayer.y);
+            const distB = Math.hypot(b.x - freePlayer.x, b.y - freePlayer.y);
+            return distA - distB;
+        });
+
+        for (let i = 0; i < monstersToReassignCount; i++) {
+            if (overloadedMonsters[i]) {
+                const monster = overloadedMonsters[i];
+                monster.currentTarget = freePlayer;
+                monster.targetLockTime = Date.now() + 5000;
+            }
         }
     }
 }
@@ -179,11 +192,7 @@ function updateServerMonsters(deltaTime, players) {
             }
         }
 
-        // =================================================================
-        // ZONA DE EXCLUSÃO RIGIDA E RESET DE NASCIMENTO NO CÉU
-        // =================================================================
-        // Barreiras físicas das torres de pedra: esquerda em 120, direita em 2056.
-        // Limite inferior do chão: 980. Limite superior ativo do céu: 100.
+        // Barreiras físicas das torres de pedra e chão
         const outOfBoundsLeft = m.x < 120;
         const outOfBoundsRight = m.x > 2056;
         const outOfBoundsBottom = m.y > 980;
@@ -192,20 +201,15 @@ function updateServerMonsters(deltaTime, players) {
         const isOutOfBounds = outOfBoundsLeft || outOfBoundsRight || outOfBoundsBottom || outOfBoundsCeiling;
         
         if (isOutOfBounds) {
-            // Se bugar fora dos limites das torres, reseta ele para o céu para descer como monstro novo
-            m.x = Math.random() * (1900 - 200) + 200; // Ponto X seguro
-            m.y = -64; // Seta no topo do céu
-            m.targetY = Math.random() * (750 - 250) + 250; // Novo Y de aterrissagem seguro
-            m.hasLanded = false; // Força nova queda
+            m.x = Math.random() * (1900 - 200) + 200; 
+            m.y = -64; 
+            m.targetY = Math.random() * (750 - 250) + 250; 
+            m.hasLanded = false; 
             m.velX = 0;
-            m.velY = 2; // Força velocidade de queda base
+            m.velY = 2; 
             continue;
         }
 
-        // =================================================================
-        // EVITAÇÃO DE TETO (GRAVIDADE ARTIFICIAL)
-        // =================================================================
-        // Se o monstro estiver na metade de cima da tela (Y < 350), aplica uma força constante de descida
         if (m.hasLanded && m.y < 350) {
             m.y += 1.5; 
         }
@@ -238,8 +242,7 @@ function updateServerMonsters(deltaTime, players) {
         }
 
         if (!m.hasLanded) {
-            // Aumentado multiplicador de queda para fazê-los despencar do céu mais rapidamente
-            m.y += (m.velY * MONSTER_FALL_MULTIPLIER) * (deltaTime / 16.67);
+            m.y += (m.velY * (global.MONSTER_FALL_MULTIPLIER || 3)) * (deltaTime / 16.67);
             if (m.y >= m.targetY) {
                 m.y = m.targetY;
                 m.hasLanded = true;
@@ -276,7 +279,7 @@ function updateServerMonsters(deltaTime, players) {
             }
         }
 
-        // Processa colisões de toque e reflexão
+        // Processa colisões de toque de qualquer jogador conectado ativo
         for (const pId in serverPlayers) {
             const p = serverPlayers[pId];
             if (!p) continue;
@@ -321,8 +324,6 @@ function updateServerMonsters(deltaTime, players) {
             }
         }
         
-        // BARREIRAS FÍSICAS RÍGIDAS (Clamping)
-        // Limita de forma estrita a movimentação dos monstros para que fiquem sempre na área visível
         m.x = Math.max(120, Math.min(2056 - m.width, m.x));
         m.y = Math.max(100, Math.min(950, m.y));
     }
@@ -371,7 +372,7 @@ const GameManager = {
             const playersArray = Object.values(serverPlayers).filter(p => !!serverConnections[p.id]);
             if (playersArray.length === 0 || gameState.isPaused) return;
 
-            // Sincronia de HP Regen (Média Cooperativa)
+            // Sincronia de HP Regen (Média Cooperativa de todos os ativos)
             let totalHpRegen = 0;
             let activeCount = 0;
             for (const pId in serverPlayers) {
@@ -506,7 +507,7 @@ const GameManager = {
                     });
                 }
 
-                // MÉDIA COOPERATIVA (OPÇÃO 2)
+                // Cálculo cooperativo médio do bônus de XP
                 let totalXpMult = 0;
                 let activeCount = 0;
                 for (const pId in serverPlayers) {
@@ -534,7 +535,7 @@ const GameManager = {
                 p.stats[key] = (p.stats[key] || 0) + rune.efeito[key];
             }
             
-            // MÉDIA COOPERATIVA (OPÇÃO 2)
+            // Cálculo cooperativo médio do bônus de vida máxima
             let totalBonusVida = 0;
             let activeCount = 0;
             for (const pId in serverPlayers) {
@@ -552,18 +553,13 @@ const GameManager = {
             gameState.sharedRaioCenarioReduction += rune.efeito.raioCenarioIntervalReduction;
         }
 
-        // Decrementa o contador numérico de escolhas pendentes deste jogador específico
+        // Decrementa o contador de escolhas pendentes do jogador correspondente
         if (pendingRuneChoicesCount[playerNumber] > 0) {
             pendingRuneChoicesCount[playerNumber]--;
             console.log(`[Rune-Choice] Decrementado contador do Jogador ${playerNumber}. Restam ${pendingRuneChoicesCount[playerNumber]} escolhas para ele.`);
-        } else {
-            console.log(`[Rune-Choice] Alerta: Jogador ${playerNumber} enviou escolha mas seu contador já estava em ${pendingRuneChoicesCount[playerNumber] || 0}.`);
         }
 
-        console.log(`[Rune-Choice] Estado atual da fila de escolhas pendentes:`, JSON.stringify(pendingRuneChoicesCount));
-
-        // CORREÇÃO: O servidor agora valida todas as escolhas de TODOS os jogadores registrados na memória (serverPlayers)
-        // para impedir que o jogo despause se um deles cair/desconectar no meio da rodada de upgrades
+        // Bloqueia e valida a pausa se qualquer jogador ainda tiver escolhas pendentes penduradas na fila do servidor
         let allChoicesResolved = true;
         for (const pId in serverPlayers) {
             const remaining = pendingRuneChoicesCount[pId] || 0;
@@ -589,18 +585,16 @@ const GameManager = {
 
     // Sincroniza e iguala o nível e os atributos do jogador que voltou
     syncReconnectedPlayer(playerNumber, targetWs) {
-        const otherPlayerNum = playerNumber === 1 ? 2 : 1;
-        const other = serverPlayers[otherPlayerNum];
         const current = serverPlayers[playerNumber];
 
         if (current && targetWs && targetWs.readyState === 1) {
-            // 1. Envia os status salvos do jogador de volta para o cliente dele (Resgate de Atributos)
+            // Envia os status salvos do jogador de volta para o cliente dele
             targetWs.send(JSON.stringify({
                 type: 'player-stats-sync',
                 payload: current.stats
             }));
 
-            // 2. Envia uma lista instantânea de monstros ativos para ele desenhar a tela congelada na pausa
+            // Envia uma lista instantânea de monstros ativos para ele desenhar a tela congelada na pausa
             const monsterUpdatePayload = serverMonsters.map(m => [
                 m.id,
                 Math.round(m.x),
@@ -614,28 +608,34 @@ const GameManager = {
                 payload: monsterUpdatePayload
             }));
 
-            // 3. Se houver outro jogador ativo, copia seus status de runas (se for nova conexao/substituição)
+            // Se for uma conexão substituta nova (Takeover), herda os atributos de algum outro mago ativo
+            let other = null;
+            for (let s = 1; s <= 4; s++) {
+                if (s !== playerNumber && serverPlayers[s]) {
+                    other = serverPlayers[s];
+                    break;
+                }
+            }
             if (other && !playerTokens[playerNumber]) {
                 current.stats = JSON.parse(JSON.stringify(other.stats));
             }
 
-            // 4. Calcula se ele perdeu hordas/níveis comparando com o playerLevel em que ele desconectou
+            // Calcula se ele perdeu hordas/níveis comparando com o playerLevel em que ele desconectou
             const currentLoggedLevel = playerLevel[playerNumber] || 1;
             const levelsMissedWhileOffline = gameState.level - currentLoggedLevel;
             const choicesLeftBeforeDisconnect = pendingRuneChoicesCount[playerNumber] || 0;
             
-            // Soma inteligente do que já estava devendo com os níveis que o parceiro subiu enquanto ele estava fora
             const totalChoicesToMake = choicesLeftBeforeDisconnect + levelsMissedWhileOffline;
 
             if (totalChoicesToMake > 0) {
                 gameState.isPaused = true;
                 isLevelUpLock = true;
                 pendingRuneChoicesCount[playerNumber] = totalChoicesToMake;
-                playerLevel[playerNumber] = gameState.level; // Atualiza o nível logado dele no banco do servidor
+                playerLevel[playerNumber] = gameState.level; 
 
                 console.log(`[Reconexão] Jogador ${playerNumber} voltou. Pendentes: ${choicesLeftBeforeDisconnect}, Ganhos fora: ${levelsMissedWhileOffline}. Alocando ${totalChoicesToMake} escolhas.`);
 
-                // Pausa o jogo globalmente para ambos (para o parceiro não morrer sozinho)
+                // Pausa o jogo globalmente para que os parceiros não joguem enquanto ele escolhe
                 if (GameManager.broadcastCallback) {
                     GameManager.broadcastCallback({ type: 'pause-state-change', payload: { isPaused: true } });
                 }
@@ -643,7 +643,6 @@ const GameManager = {
                 // Envia as escolhas de runas apenas para quem reconectou
                 targetWs.send(JSON.stringify({ type: 'level-up', payload: { levelsGained: totalChoicesToMake } }));
             } else {
-                // Se não perdeu níveis e não tinha pendências, apenas atualiza o seu registro de nível atual do servidor
                 playerLevel[playerNumber] = gameState.level;
             }
         }
@@ -652,7 +651,7 @@ const GameManager = {
     startGame(broadcastCallback, grassSeed) {
         if (gameState.isGameRunning) return;
 
-        console.log("[Game Manager] Iniciando novo jogo.");
+        console.log("[Game Manager] Iniciando novo jogo multiplayer.");
         gameState.isGameRunning = true;
         gameState.isPaused = false;
         isLevelUpLock = false;
@@ -663,8 +662,10 @@ const GameManager = {
         gameState.xpMax = 100;
         gameState.currentHorde = 0;
         gameState.sharedRaioCenarioReduction = 0;
-        pendingRuneChoicesCount = {}; // Reseta os contadores ativos
-        playerLevel = { 1: 1, 2: 1 }; // Reseta o histórico de níveis logados
+        pendingRuneChoicesCount = {}; 
+        
+        // Inicializa o playerLevel para os 4 slots
+        playerLevel = { 1: 1, 2: 1, 3: 1, 4: 1 }; 
         
         GameManager.runSimulation(broadcastCallback);
         
@@ -700,7 +701,19 @@ const GameManager = {
         while (gameState.xp >= gameState.xpMax) {
             gameState.level++;
             gameState.xp -= gameState.xpMax;
-            gameState.xpMax = Math.floor(gameState.xpMax * 1.5);
+            
+            // --- Novas Fórmulas Sincronizadas do Servidor (4 Rampas de Dificuldade) ---
+            const N = gameState.level;
+            if (N >= 1 && N <= 5) {
+                gameState.xpMax = Math.floor(10 * (50 * N + 50));
+            } else if (N >= 6 && N <= 15) {
+                gameState.xpMax = Math.floor(10 * (100 * Math.pow(N, 1.2)));
+            } else if (N >= 16 && N <= 30) {
+                gameState.xpMax = Math.floor(10 * (200 * Math.pow(N, 1.3)));
+            } else if (N >= 31) {
+                gameState.xpMax = Math.floor(10 * (500 * Math.pow(N, 1.1)));
+            }
+
             gameState.sharedLifeMax += 10;
             gameState.sharedLife = gameState.sharedLifeMax;
             levelsGained++;
@@ -709,7 +722,6 @@ const GameManager = {
         if (levelsGained > 0) {
             console.log(`[Game Manager] Level Up! Nível atual: ${gameState.level}. Pausando para seleção de runas.`);
             
-            // CORREÇÃO VISUAL: Antes de pausar, envia uma última sincronização de monstros limpa para evitar discrepâncias visuais na pausa
             const monsterUpdatePayload = serverMonsters.map(m => [
                 m.id,
                 Math.round(m.x),
@@ -723,13 +735,11 @@ const GameManager = {
             gameState.isPaused = true;
             isLevelUpLock = true; 
             
-            // Aloca a quantidade de escolhas obtidas nesta subida para todos os jogadores ativos na horda
-            console.log(`[Level-Up] Sincronizando escolhas pendentes.`);
+            // Aloca hordas de escolhas obtidas para todos os jogadores que estão conectados
             for (const pId in serverPlayers) {
                 if (serverConnections[pId]) {
                     pendingRuneChoicesCount[pId] = (pendingRuneChoicesCount[pId] || 0) + levelsGained;
-                    playerLevel[pId] = gameState.level; // Sincroniza o nível logado de todos os ativos
-                    console.log(`[Level-Up] Jogador ${pId} acumulou +${levelsGained} escolhas. Total dele: ${pendingRuneChoicesCount[pId]}`);
+                    playerLevel[pId] = gameState.level; 
                 }
             }
 
@@ -774,7 +784,6 @@ const GameManager = {
         GameManager.syncGameState(GameManager.broadcastCallback);
     },
 
-    // Sincroniza o status de pausa ativa do servidor no pacote de sincronia periódica
     syncGameState(broadcastCallback) {
         broadcastCallback({ type: 'game-state-sync', payload: {
             level: gameState.level, xp: gameState.xp, xpMax: gameState.xpMax,
